@@ -1,0 +1,569 @@
+import requests
+import re
+import nltk
+from nltk import tokenize
+#nltk.download('punkt') #Eenmalig aanzetten wanneer je voor de eerste keer de code runt.
+
+S = requests.Session()
+URL = "https://nl.wikipedia.org/w/api.php"
+
+f = open("eerstesecties.txt", "w")
+g = open("zinnenmetonderwerp.txt", "w")
+
+# Maakt een lijst van alle onderwerpen binnen een Wikipediacategorie.
+def getCategorieLijst(categorie):
+  lijstOnderwerpenCategorie = []
+  PARAMS = {
+      'action': "query",
+      'list': "categorymembers",
+      'cmtitle': "Category:" + categorie,
+      'cmlimit': 440, # Pakt maximaal de eerste 440 items van een categorie.
+      'cmprop':'title|sortkey',
+      #'cmstarthexsortkey': '', Als je de sortkey invult, kun je de code laten runnen vanaf die sortkey.
+      'format': "json"
+  }
+
+  R = S.get(url=URL, params=PARAMS)
+  data = R.json()
+
+  for element in data['query']['categorymembers']:
+    # We willen geen Wikipediacategorieën, alleen de elementen binnen zo'n categorie.
+    if not element['title'].startswith('Categorie:'): 
+      lijstOnderwerpenCategorie.append(element['title'])
+  
+  return lijstOnderwerpenCategorie
+
+# Geeft een lijst van de supercategorieën van een Wikipediaonderwerp.
+def getSuperCat(onderwerp):
+  superCat = []
+  PARAMS = {
+      "action":"query",
+      "format":"json", 
+      "titles":onderwerp,
+      "prop":"categories",
+  }
+  R = S.get(url=URL, params=PARAMS)
+  data = R.json()
+
+  for waarde in data["query"]["pages"].values():
+    if 'categories' in waarde: # Niet alle Wikipediapagina's hebben een supercategorie.
+      for dictionary in waarde['categories']:
+        if not dictionary['title'].startswith('Categorie:Wikipedia:'): 
+          # Wikipedia kent ook verborgen categorieën, die willen we niet.
+          categorie = dictionary['title']
+          superCat.append(categorie)         
+      return superCat
+    else:
+      return onderwerp + " heeft geen supercategorie(ën)."
+
+# Maakt van een Wikipediapagina een lijst
+# van alle zinnen waarin dat onderwerp voorkomt.
+def getZinnenMetOnderwerp(onderwerp):
+  alleSecties = ""
+  aantalSecties = ['0']
+
+  PARAMS = {
+      'action': 'parse',
+      'page': onderwerp,
+      'prop': 'sections',
+      'format': 'json'
+  }
+  R = S.get(url=URL, params=PARAMS)
+  data = R.json()
+
+  # Neemt alle secties.
+  if not data['parse']['sections'] == []:
+    for sectienummer in data['parse']['sections']:
+      if sectienummer['index'] != '':
+        aantalSecties.append(sectienummer['index'])
+        for indexnummer in aantalSecties:
+          PARAMS = {
+          'action': "parse",
+          'prop': "wikitext",
+          'section': indexnummer,
+          'page': onderwerp,
+          'format': "json"
+          }
+
+          R = S.get(url=URL, params=PARAMS)
+          data = R.json()
+
+          volgendeSectie = data['parse']['wikitext']['*']
+          volgendeSectie = maakSectieSchoon(volgendeSectie)
+          print(volgendeSectie)
+          
+          volgendeSectie = re.sub(re.escape(onderwerp), "[[" + onderwerp + "]]", volgendeSectie)
+          volgendeSectie = re.sub("\'\'\'", "", volgendeSectie)
+          volgendeSectie = re.sub("\'\'", "", volgendeSectie)
+          alleSecties += volgendeSectie + " "
+  else:
+    PARAMS = {
+    'action': "parse",
+    'prop': "wikitext",
+    'section': 0,
+    'page': onderwerp,
+    'format': "json"
+    }
+
+    R = S.get(url=URL, params=PARAMS)
+    data = R.json()
+    alleSecties = data['parse']['wikitext']['*']
+    alleSecties = maakSectieSchoon(alleSecties)
+    print(alleSecties)
+
+    # De titel van de pagina is ook een NE, dus die wordt ook binnen [[]] geplaatst.
+    alleSecties = re.sub(re.escape(onderwerp), "[[" + onderwerp + "]]", alleSecties)
+    alleSecties = re.sub("\'\'\'", "", alleSecties)
+    alleSecties = re.sub("\'\'", "", alleSecties)
+    
+  # Maakt een lijst van alle zinnen waarin het onderwerp voorkomt,
+  # waarin alle links de vorm aannemen van [[a|b]] of [[c]]
+  zinnenMetOnderwerp = []
+  regexNE = "[[" + re.escape(onderwerp) + "]]"
+  for zin in tokenize.sent_tokenize(alleSecties):
+    if re.search(regexNE, zin):
+      zinnenMetOnderwerp.append(zin)  
+  
+  # Vindt alle named entities (die eruitzien als [[c]] of [[a|b]]) in de zinnen met het onderwerp erin. 
+  NEsInZinnenMetStreepje = []
+  for zin in zinnenMetOnderwerp:
+    NEsInZinnenMetStreepje.append(re.findall(r"\[\[(?:'[a-z][\s-])?[A-ZŁ].*?\]\]", zin))
+     
+  # Verandert alle [[a|b]] NEs in [[b]].
+  for linklijst in NEsInZinnenMetStreepje:
+    for link in linklijst:
+      if link != '':
+        if re.match("(.*?)\|(.*?)", link):
+          linkNa = re.sub("^((.*?)\|)", "", link)
+          alleSecties = re.sub(re.escape(link), linkNa, alleSecties)
+  
+  # Maakt een lijst van alle zinnen waarin het onderwerp voorkomt,
+  # waarin alle links de vorm aannemen van [[a]].
+  zinnenNEZonderStreepje = []
+  regexNEnieuw = "[[" + re.escape(onderwerp) + "]]"
+  for zin in tokenize.sent_tokenize(alleSecties):
+    if re.search(regexNEnieuw, zin):
+      zinnenNEZonderStreepje.append(zin)
+  
+  NEplustags = {}
+  
+  for linklijst in NEsInZinnenMetStreepje:
+    for link in linklijst:
+      if link != '':
+        if re.match("(.*?)\|(.*?)", link):
+          link = re.sub("[\[\[\]\]]", "", link)
+          linkNa = re.sub("^((.*?)\|)", "", link)
+          linkVoor = re.sub("\|(.*?)$", "", link)
+          if getURL(linkVoor) != " does not have a link.":
+            NEplustags[linkNa] = getNERtag(linkVoor)   
+        else:
+          link = re.sub("[\[\[\]\]]", "", link)
+          if getURL(link) != " does not have a link.":
+            NEplustags[link] = getNERtag(link)
+  
+  return zinnenNEZonderStreepje, NEplustags
+
+def maakSectieSchoon(sectie):
+  # Verwijdert de Infobox, categorieën, bestanden, links, tussenkopjes, footnotes, and afbeeldingen van de sectietekst.
+  veranderingen = [
+    ('\{\| class(.*?)\|\}', ''), 
+    ('\[\[Categorie:(.*?)\]\]\n?', ''),
+    ('\[\[Bestand(.*?)\]\](?:\s-)?\n', ''),
+    ('\[\[Bestand(.*?)\]\]$', ''),
+    ('\[\[Image:(.*?)\]\]\n', ''),
+    ('\[\[Image:(.*?)\]\]', ''),
+    ('\[\[Afbeelding(.*?)\]\]\n', ''),
+    ('\[\[File(.*?)\]\]\n', ''),
+    ('<ref>\[.*?\n?.*?\].*?<\/ref>', ''),
+    ('<ref name="\w*"/>', ''),    
+    ('<\/?(.*?)>(.*?)<\/?(.*?)>', ''),
+    ('\{\{((.*?)(.+\n)*)\}\}\n*', ''),
+    ('==(.*?)==\s', ''), 
+    ('\[http.*?\]\n?', ''),
+    ('\*\s?\[http.*?\]', ''), 
+    ('\n',' ')
+  ]
+  
+  for oud, nieuw in veranderingen:
+    sectie = re.sub(oud, nieuw, sectie) 
+  
+  # Vindt alle a|b links waarin b begint met een kleine letter of getal.
+  # Verwijdert de a| in a|b links.
+  for link in re.findall(r"\[\[([^]]+)\|[a-z0-9].*?\]\]", sectie):
+    sectie = re.sub(re.escape(link) + r"\|", "", sectie)
+  
+  # Vindt alle links die beginnen met een kleine letter of getal.
+  # Verwijdert de [[ ]] om links die beginnen met een kleine letter of getal.
+  for link in re.findall(r"\[\['?\.?[a-z0-9].*?\]\]", sectie):
+    link = re.sub("[\[\[\]\]]", "", link)
+    sectie = re.sub(r"\[\[" + re.escape(link) + r"\]\]", re.escape(link), sectie)
+    
+  # Woorden na het opsommingsteken * worden altijd met een hoofdletter geschreven,
+  # ook al verwijzen ze niet naar een named entity.
+  # Onderstaande code haalt de [[ ]] weg van links die na * volgen. 
+  for link in re.findall(r"\*\[\[[A-Za-z0-9].*?\]\]", sectie):
+    link = re.sub("[\[\[\]\]]", "", link)
+    sectie = re.sub(r"\[\[" + re.escape(link) + r"\]\]", re.escape(link), sectie)
+    
+  # Soms staat er in de sectie [[Nederland]]se of [[Bloedbank]]en. 
+  # De link gaat dan naar de pagina van wat er tussen [[]] staat, 
+  # maar de NE is in dat geval het volledige woord. 
+  # Onderstaand stukje code zorgt ervoor dat [[Nederland]]se [[Nederland|Nederlandse]] wordt.
+  for link in re.findall(r"\[\[(\b[A-Z].*?)\]\]", sectie):
+    for onvolNE in re.findall(r"\[\[" + re.escape(link) + r"\]\][a-z]+", sectie):
+      volNE = re.sub("[\[\[\]\]]", "", onvolNE)
+      sectie = re.sub(re.escape(onvolNE), "[[" + volNE + "]]", sectie)
+  
+  # Als het woord wel gelinkt is, maar naar een niet-bestaande pagina verwijst,
+  # worden de [[ ]] eromheen verwijderd.
+  for link in re.findall(r"\[\[(?:'[a-z][\s-])?[A-ZŁ].*?\]\]", sectie):
+    if re.match("(.*?)\|(.*?)", link):
+      linkVoor = re.sub("\|(.*?)$", "", link)
+      if getURL(linkVoor) == " does not have a link.":
+        sectie = re.sub(r"\[\[" + re.escape(link) + "\]\]", link, sectie)
+    elif getURL(link) == " does not have a link.":
+      sectie = re.sub(r"\[\[" + re.escape(link) + "\]\]", link, sectie)
+      
+  return sectie
+
+def getEersteSectie(onderwerp):
+  linksInSectieURL = []
+  PARAMS = {
+  'action': "parse",
+  'prop': "wikitext",
+  'section': 0,
+  'page': onderwerp,
+  'format': "json"
+  }
+
+  R = S.get(url=URL, params=PARAMS)
+  data = R.json()
+  sectie = data['parse']['wikitext']['*']
+
+  sectie = maakSectieSchoon(sectie)
+
+  # De titel van de pagina is ook een NE, dus die wordt ook binnen [[]] geplaatst.
+  sectie = re.sub(re.escape(onderwerp), "[[" + onderwerp + "]]", sectie)
+  sectie = re.sub("\'\'\'", "", sectie)
+  sectie = re.sub("\'\'", "", sectie)
+    
+  #linksInSectieURL = re.findall(r"\[\[(\b[A-Z].*?)\]\]", sectie)
+  linksInSectie = re.findall(r"\[\[(?:'[a-z][\s-])?[A-ZŁ].*?\]\]", sectie)
+  
+  for link in linksInSectie:
+    link = re.sub(r"\[\[|\]\]", "", link)
+    linksInSectieURL.append(link)
+    
+  for link in linksInSectieURL:
+    if re.match("(.*?)\|(.*?)", link):
+      linkNa = re.sub("^((.*?)\|)", "", link)
+      sectie = re.sub(re.escape(link), linkNa, sectie)
+
+  linksInTekst = re.findall(r"\[\[(\b[A-Z].*?)\]\]", sectie)
+  
+  NEplustags = {}
+
+  for link in linksInSectieURL:
+    if re.match("(.*?)\|(.*?)", link):
+      linkNa = re.sub("^((.*?)\|)", "", link)
+      linkVoor = re.sub("\|(.*?)$", "", link)
+      if getURL(linkVoor) != " does not have a link.":
+        tag1 = getNERtag(linkVoor) 
+        NEplustags[linkNa]= tag1
+    elif getURL(link) != " does not have a link.":
+      tag2 = getNERtag(link)
+      NEplustags[link] = tag2  
+
+  return (sectie, NEplustags)
+
+queue = []
+def getNERtag(onderwerp):
+  result = ''
+  queue.append(onderwerp)
+  
+  while queue and result == '':
+    cat = queue.pop(0)
+    result = findCat(cat)
+
+  return result
+      
+  
+def findCat(onderwerp):
+  superCategorieën = ''
+  
+  PARAMS = {
+      'action': 'query',
+      'format': 'json',
+      'pageids': getURL(onderwerp),
+  }
+  
+  R = S.get(url=URL, params=PARAMS)
+  data = R.json()
+  titel = data['query']['pages'][getURL(onderwerp)]['title']
+  
+  superCategorieën = getSuperCat(titel)
+  
+  if superCategorieën == onderwerp + " heeft geen supercategorie(ën).":
+    return 'misc'
+  
+  sti = ['stichting']
+  org = ['organisatie', 'vereniging', 'kerkgenootschap', 'fonds', 'ministerie', 
+        'partij', 'omroep', 'krijgsmacht', 'universiteit', 'bestuursorgaan', 'raad', 'instituut',
+        'museum', 'instantie', 'bedrijf']
+  per = ['persoon', 'hoogleraar', 'wetenschapper', 'schrijver', 'politicus',
+        'ontwerper', 'god ']
+  loc = ['geografie', 'plaats', 'rijk', 'continent', 'provincie', 
+        'meer', 'land in', 'monument', 'bouwwerk', 'planeet']
+  eve = ['oorlog', 'themadag', 'evenement', 'natuurramp']
+  pro = ['taal', 'dialect', 'prijs', 'boek ', 'schrift', ' dier', 'object', 'lied', 
+         'voertuig', 'vliegtuig', 'krant']
+  misc = ['stroming', 'volk', 'formaat', 'chemische stof', 'wet ', 'koninkrijk',
+         'website', 'onderwijsvorm']
+  
+  for cat in superCategorieën:
+    for stichting in sti:
+      if stichting in cat.lower():
+        queue.clear()
+        return 'sti'
+  
+  for cat in superCategorieën:
+    for organisatie in org:
+      if organisatie in cat.lower():
+        queue.clear()
+        return 'org'
+    for persoon in per:
+      if persoon in cat.lower():
+        queue.clear()
+        return 'per'
+    for locatie in loc:
+      if locatie in cat.lower():
+        queue.clear()
+        return 'loc'
+    for evenement in eve:
+      if evenement in cat.lower():
+        queue.clear()
+        return 'eve'
+    for product in pro:
+      if product in cat.lower():
+        queue.clear()
+        return 'pro'
+    for miscellaneous in misc:
+      if miscellaneous in cat.lower():
+        queue.clear()
+        return 'misc'
+
+  queue.extend(superCategorieën)
+  
+  return ''
+
+  
+def getURL(onderwerp):
+  PARAMS = {
+      'action': "query",
+      'titles': onderwerp,
+      'format': "json",
+      'redirects': True
+  }
+  R = S.get(url=URL, params=PARAMS)
+  data = R.json()
+  for pageid in data['query']['pages'].keys():
+    if pageid == "-1":
+      return " does not have a link."
+    else:
+      return pageid
+
+def cleanWpL(text):  
+  changes = [
+    (r"([?!:/;\"]+)", r" \1"), 
+    (r"([()’‘]+)", r" \1 "),
+    (r"([.,]\s)", r" \1 "),
+    (r"\.$", r" . "),
+    (r"\\", ""),
+    (r"\]\]'", "]] '"), # for 't Vossenhol
+    ("  ", " ")
+  ]
+  
+  for old, new in changes:
+    text = re.sub(old, new, text) 
+  
+  # Dealt met NEs als [[a]]-[[b]], of [[a]]-b
+  tweeNEsMetStreepje = re.findall(r"\[\[.*?\]\]-(?:\[\[)*\w*(?:\]\])*", text)
+  for ne in tweeNEsMetStreepje:
+    nenieuw = re.sub(r"-", " - ", ne)
+    text = re.sub(re.escape(ne), nenieuw, text)
+   
+  # Dealt met afkortingen
+  afkortingen = re.findall(r"[A-Z]\s\.(?:[A-Z]\s\.)*\s\w*", text)
+  for afk in afkortingen:
+    afknieuw = re.sub(r"\s\.", ".", afk)
+    text = re.sub(re.escape(afk), afknieuw, text)
+    
+  # Dealt met vraagtekens, uitroeptekens, dubbele punten, haakjes, komma's, apostrofs en punten in NEs
+  alleNEs = re.findall(r"\[\[(?:.*?)\]\]", text)
+  for ne in alleNEs:
+    if re.search("\(.*?\)", ne): # als er haakjes binnen een NE staan.
+      nenieuw = re.sub("\s\)\s", ")", ne)
+      nenieuwer = re.sub("\(\s", "(", nenieuw)
+      text = re.sub(re.escape(ne), nenieuwer, text)
+    if ' - ' in ne:
+      nenieuw = re.sub("[\[\[\]\]]", "", ne)
+      if nenieuw not in dictOfNEsAndTags:
+        nenieuw = re.sub('\s-\s', '-', ne)
+        text = re.sub(re.escape(ne), nenieuw, text)
+    if re.search("\[\[\[\[.*?\]\]", ne):
+      nenieuw = re.sub("[\[\[\]\]]", "", ne)
+      text = re.sub(re.escape(ne), nenieuw, text)
+    if re.search(re.escape(ne) + "\]\]", text):
+      text = re.sub("[\]\]]", "", text)
+    for n in re.findall(r"\s[?!:,\".’/;]+", ne):
+      nnieuw = re.sub(r"\s", "", n)
+      nenieuw = re.sub(re.escape(n), nnieuw, ne)
+      text = re.sub(re.escape(ne), nenieuw, text)
+      
+  return text
+
+def woordPerRegel(text, dictOfNEsAndTags):
+  print(text)
+  print(dictOfNEsAndTags)
+  
+  changes = [
+    (r"([?!:/;\"]+)", r" \1"), 
+    (r"([()’‘]+)", r" \1 "),
+    (r"([.,]\s)", r" \1 "),
+    (r"\.$", r" . "),
+    (r"\\", ""),
+    (r"\]\]'", "]] '"), # for 't Vossenhol
+    ("  ", " ")
+  ]
+  
+  for old, new in changes:
+    text = re.sub(old, new, text) 
+  
+  # Dealt met NEs als [[a]]-[[b]], of [[a]]-b
+  tweeNEsMetStreepje = re.findall(r"\[\[.*?\]\]-(?:\[\[)*\w*(?:\]\])*", text)
+  for ne in tweeNEsMetStreepje:
+    nenieuw = re.sub(r"-", " - ", ne)
+    text = re.sub(re.escape(ne), nenieuw, text)
+   
+  # Dealt met afkortingen
+  afkortingen = re.findall(r"[A-Z]\s\.(?:[A-Z]\s\.)*\s\w*", text)
+  for afk in afkortingen:
+    afknieuw = re.sub(r"\s\.", ".", afk)
+    text = re.sub(re.escape(afk), afknieuw, text)
+    
+  # Dealt met vraagtekens, uitroeptekens, dubbele punten, haakjes, komma's, apostrofs en punten in NEs
+  alleNEs = re.findall(r"\[\[(?:.*?)\]\]", text)
+  for ne in alleNEs:
+    if re.search("\(.*?\)", ne): # als er haakjes binnen een NE staan.
+      nenieuw = re.sub("\s\)\s", ")", ne)
+      nenieuwer = re.sub("\(\s", "(", nenieuw)
+      text = re.sub(re.escape(ne), nenieuwer, text)
+    if ' - ' in ne:
+      nenieuw = re.sub("[\[\[\]\]]", "", ne)
+      if nenieuw not in dictOfNEsAndTags:
+        nenieuw = re.sub('\s-\s', '-', ne)
+        text = re.sub(re.escape(ne), nenieuw, text)
+    if re.search("\[\[\[\[.*?\]\]", ne):
+      nenieuw = re.sub("[\[\[\]\]]", "", ne)
+      text = re.sub(re.escape(ne), nenieuw, text)
+    if re.search(re.escape(ne) + "\]\]", text):
+      text = re.sub("[\]\]]", "", text)
+    for n in re.findall(r"\s[?!:,\".’/;]+", ne):
+      nnieuw = re.sub(r"\s", "", n)
+      nenieuw = re.sub(re.escape(n), nnieuw, ne)
+      text = re.sub(re.escape(ne), nenieuw, text)
+  
+  lijstVanZinnen = re.split(r'(?<= \.) ', text)
+
+  output = []
+  search = ""
+  inTag = False
+
+  for zin in lijstVanZinnen:
+    for w in zin.split(" "):
+      outTag = False
+      rest = w
+
+      if rest[:2] == "[[":
+        rest = rest[2:]
+        inTag = True
+      if rest[-2:] == "]]":
+        rest = rest[:-2]
+        outTag = True
+
+      if inTag:
+        search += rest
+        if outTag:
+          val = dictOfNEsAndTags[search]
+          for word in search.split()[:1]:
+            output.append(word + "\tB-" + val)
+          for word in search.split()[1:]:
+            output.append(word + "\tI-" + val)
+          inTag = False
+          search = ""
+        else:
+          search += " "
+      
+      elif rest != "":
+        output.append(rest + "\tO")
+    
+    if output:
+      if output[-1].endswith('.\tO'):
+        output.extend("\n")
+ 
+  return output
+
+for stichting in getCategorieLijst("Amerikaanse stichting"):
+  print(getZinnenMetOnderwerp(stichting))
+  
+#print(woordPerRegel(getZinnenMetOnderwerp("'t Vossenhol")[0], getZinnenMetOnderwerp("'t Vossenhol")[1]))
+
+'''
+for w in woordPerRegel(getZinnenMetOnderwerp("Waag Society")[0], getZinnenMetOnderwerp("Waag Society")[1]):
+  for x in w:
+    f.write(x)
+  f.write("\n")
+
+
+print(getZinnenMetOnderwerp("ProGay")[0])
+
+for zin in getZinnenMetOnderwerp("Waag Society")[0]:
+  for w in woordPerRegel(zin, getZinnenMetOnderwerp("Waag Society")[1]):
+    g.write(w)
+    g.write("\n")
+
+
+
+for stichting in getCategorieLijst("Nederlandse stichting"):
+  for zin in getZinnenMetOnderwerp(stichting)[0]:
+    for w in woordPerRegel(zin, getZinnenMetOnderwerp(stichting)[1]):
+      g.write(w)
+      g.write("\n")
+    g.write("\n")
+
+g = open('zinnenmetonderwerp.txt')
+inhoud = g.read()
+g.close()
+nieuweInhoud = inhoud.replace('\n\n\n', '\n')
+g = open('zinnenmetonderwerp.txt', 'w')
+g.write(nieuweInhoud)
+
+
+
+# Duration 1 hour and 45 minutes for 440 articles.
+for stichting in getCategorieLijst("Nederlandse stichting"):
+  for w in woordPerRegel(getEersteSectie(stichting)[0], getEersteSectie(stichting)[1]):
+    for x in w:
+      f.write(x)
+    f.write("\n")
+
+f = open('eerstesecties.txt')
+inhoud = f.read()
+f.close()
+nieuweInhoud = inhoud.replace('\n\n', '\n')
+f = open('eerstesecties.txt', 'w')
+f.write(nieuweInhoud)
+'''
+
+g.close()
+f.close()
