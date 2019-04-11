@@ -56,8 +56,8 @@ def getParentCat(subject):
     else:
       return subject + " does not have any parent categories."
 
-# Maakt van een Wikipediapagina een lijst
-# van alle zinnen waarin dat onderwerp voorkomt.
+# Given a certain Wikipedia article, will return a list of 
+# sentences containing the title of that Wikipedia article.
 def getSentencesWithSubject(subject):
   allSections = ""
   numberSections = ['0']
@@ -400,7 +400,7 @@ def cleanWpL(text):
   # Deals with various non-alphanumeric characters inside of NEs.
   allNEs = re.findall(r"\[\[(?:.*?)\]\]", text)
   for ne in allNEs:
-    if re.search("\(.*?\)", ne): # als er haakjes binnen een NE staan.
+    if re.search("\(.*?\)", ne):
       neNew = re.sub("\s\)\s", ")", ne)
       neNewer = re.sub("\(\s", "(", neNew)
       text = re.sub(re.escape(ne), neNewer, text)
