@@ -1,5 +1,5 @@
 # wikinerdata
-Script to collect data from Wikipedia and automatically annotate it with Named Entity type. 
+Script to collect data from Wikipedia and automatically annotate the named entities with Named Entity type. 
 
 Given a certain Wikipedia category (for example "Dutch foundations"), the script is able to collect from each article in that given category:
 1) The first section 
