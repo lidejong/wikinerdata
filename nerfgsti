@@ -90,7 +90,6 @@ def getZinnenMetOnderwerp(onderwerp):
 
           volgendeSectie = data['parse']['wikitext']['*']
           volgendeSectie = maakSectieSchoon(volgendeSectie)
-          print(volgendeSectie)
           
           volgendeSectie = re.sub(re.escape(onderwerp), "[[" + onderwerp + "]]", volgendeSectie)
           volgendeSectie = re.sub("\'\'\'", "", volgendeSectie)
@@ -109,7 +108,6 @@ def getZinnenMetOnderwerp(onderwerp):
     data = R.json()
     alleSecties = data['parse']['wikitext']['*']
     alleSecties = maakSectieSchoon(alleSecties)
-    print(alleSecties)
 
     # De titel van de pagina is ook een NE, dus die wordt ook binnen [[]] geplaatst.
     alleSecties = re.sub(re.escape(onderwerp), "[[" + onderwerp + "]]", alleSecties)
